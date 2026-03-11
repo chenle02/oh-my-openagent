@@ -17,6 +17,7 @@ import { reorderAgentsByPriority } from "./agent-priority-order";
 import { remapAgentKeysToDisplayNames } from "./agent-key-remapper";
 import { buildPrometheusAgentConfig } from "./prometheus-agent-config-builder";
 import { buildPlanDemoteConfig } from "./plan-model-inheritance";
+import { normalizeAgentModelFields } from "./agent-model-normalizer";
 
 type AgentConfigRecord = Record<string, Record<string, unknown> | undefined> & {
   build?: Record<string, unknown>;
@@ -254,6 +255,7 @@ export async function applyAgentConfig(params: {
   }
 
   const agentResult = params.config.agent as Record<string, unknown>;
+  normalizeAgentModelFields(agentResult);
   log("[config-handler] agents loaded", { agentKeys: Object.keys(agentResult) });
   return agentResult;
 }
