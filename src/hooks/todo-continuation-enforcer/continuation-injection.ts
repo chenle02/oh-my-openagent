@@ -24,6 +24,7 @@ import { getMessageDir } from "./message-directory"
 import { getIncompleteCount } from "./todo"
 import type { ResolvedMessageInfo, Todo } from "./types"
 import type { SessionStateStore } from "./session-state"
+import { readAndConsumeNotes } from "./notes-reader"
 
 function hasWritePermission(tools: Record<string, ToolPermission> | undefined): boolean {
   const editPermission = tools?.edit
@@ -127,12 +128,16 @@ export async function injectContinuation(args: {
 
   const incompleteTodos = todos.filter((todo) => todo.status !== "completed" && todo.status !== "cancelled")
   const todoList = incompleteTodos.map((todo) => `- [${todo.status}] ${todo.content}`).join("\n")
+  const humanNotes = readAndConsumeNotes(ctx.directory)
+  const notesSection = humanNotes
+    ? `\n\n[HUMAN NOTES — PRIORITY DIRECTIVES FROM SUPERVISOR]:\n${humanNotes}`
+    : ""
   const prompt = `${CONTINUATION_PROMPT}
 
 [Status: ${todos.length - freshIncompleteCount}/${todos.length} completed, ${freshIncompleteCount} remaining]
 
 Remaining tasks:
-${todoList}`
+${todoList}${notesSection}`
 
   const injectionState = sessionStateStore.getExistingState(sessionID)
   if (injectionState) {
