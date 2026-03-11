@@ -152,7 +152,10 @@ Available categories: ${allCategoryNames}`,
 
   if (!categoryModel && actualModel) {
     const parsedModel = parseModelString(actualModel)
-    categoryModel = parsedModel ?? undefined
+    const variantToUse = userCategories?.[args.category!]?.variant ?? resolved.config.variant
+    categoryModel = parsedModel
+      ? (variantToUse ? { ...parsedModel, variant: variantToUse } : parsedModel)
+      : undefined
   }
   const categoryPromptAppend = resolved.promptAppend || undefined
 
