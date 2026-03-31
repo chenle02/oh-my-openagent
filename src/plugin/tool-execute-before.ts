@@ -20,16 +20,48 @@ export function createToolExecuteBeforeHandler(args: {
 ) => Promise<void> {
   const { ctx, hooks } = args
 
+  function buildUltraworkOracleVerificationPrompt(prompt: string, originalTask: string, verificationAttemptId: string): string {
+    const verificationPrompt = [
+      "You are verifying the active ULTRAWORK loop result for this session.",
+      "",
+      "Original task:",
+      originalTask,
+      "",
+      "Review the work skeptically and critically.",
+      "Assume it may be incomplete, misleading, or subtly broken until the evidence proves otherwise.",
+      "Look for missing scope, weak verification, process violations, hidden regressions, and any reason the task should NOT be considered complete.",
+      "",
+      `If the work is fully complete, end your response with <promise>${ULTRAWORK_VERIFICATION_PROMISE}</promise>.`,
+      "If the work is not complete, explain the blocking issues clearly and DO NOT emit that promise.",
+      "",
+      `<ulw_verification_attempt_id>${verificationAttemptId}</ulw_verification_attempt_id>`,
+    ].join("\n")
+
+    return `${prompt ? `${prompt}\n\n` : ""}${verificationPrompt}`
+  }
+
   return async (input, output): Promise<void> => {
+    if (input.tool.toLowerCase() === "bash" && typeof output.args.command === "string") {
+      if (output.args.command.includes("\x00")) {
+        output.args.command = output.args.command.replace(/\x00/g, "")
+        log("[tool-execute-before] Stripped null bytes from bash command", {
+          sessionID: input.sessionID,
+          callID: input.callID,
+        })
+      }
+    }
+
     await hooks.writeExistingFileGuard?.["tool.execute.before"]?.(input, output)
     await hooks.questionLabelTruncator?.["tool.execute.before"]?.(input, output)
     await hooks.claudeCodeHooks?.["tool.execute.before"]?.(input, output)
     await hooks.nonInteractiveEnv?.["tool.execute.before"]?.(input, output)
+    await hooks.bashFileReadGuard?.["tool.execute.before"]?.(input, output)
     await hooks.commentChecker?.["tool.execute.before"]?.(input, output)
     await hooks.directoryAgentsInjector?.["tool.execute.before"]?.(input, output)
     await hooks.directoryReadmeInjector?.["tool.execute.before"]?.(input, output)
     await hooks.rulesInjector?.["tool.execute.before"]?.(input, output)
     await hooks.tasksTodowriteDisabler?.["tool.execute.before"]?.(input, output)
+    await hooks.webfetchRedirectGuard?.["tool.execute.before"]?.(input, output)
     await hooks.prometheusMdOnly?.["tool.execute.before"]?.(input, output)
     await hooks.sisyphusJuniorNotepad?.["tool.execute.before"]?.(input, output)
     await hooks.atlasHook?.["tool.execute.before"]?.(input, output)
@@ -79,13 +111,23 @@ export function createToolExecuteBeforeHandler(args: {
 
       if (shouldInjectOracleVerification) {
         const verificationAttemptId = randomUUID()
+        log("[tool-execute-before] Injecting ULW oracle verification attempt", {
+          sessionID: input.sessionID,
+          callID: input.callID,
+          verificationAttemptId,
+          loopSessionID: loopState.session_id,
+        })
         writeState(ctx.directory, {
           ...loopState,
           verification_attempt_id: verificationAttemptId,
           verification_session_id: undefined,
         })
         argsObject.run_in_background = false
-        argsObject.prompt = `${prompt ? `${prompt}\n\n` : ""}You are verifying the active ULTRAWORK loop result for this session. Review whether the original task is truly complete: ${loopState.prompt}\n\nIf the work is fully complete, end your response with <promise>${ULTRAWORK_VERIFICATION_PROMISE}</promise>. If the work is not complete, explain the blocking issues clearly and DO NOT emit that promise.\n\n<ulw_verification_attempt_id>${verificationAttemptId}</ulw_verification_attempt_id>`
+        argsObject.prompt = buildUltraworkOracleVerificationPrompt(
+          prompt,
+          loopState.prompt,
+          verificationAttemptId,
+        )
       }
     }
 

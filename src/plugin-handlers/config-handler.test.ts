@@ -557,7 +557,7 @@ describe("Prometheus category config resolution", () => {
 
     // then
     expect(config).toBeDefined()
-    expect(config?.model).toBe("openai/gpt-5.3-codex")
+    expect(config?.model).toBe("openai/gpt-5.4")
     expect(config?.variant).toBe("xhigh")
   })
 
@@ -617,7 +617,7 @@ describe("Prometheus category config resolution", () => {
 
     // then - falls back to DEFAULT_CATEGORIES
     expect(config).toBeDefined()
-    expect(config?.model).toBe("openai/gpt-5.3-codex")
+    expect(config?.model).toBe("openai/gpt-5.4")
     expect(config?.variant).toBe("xhigh")
   })
 
@@ -1243,7 +1243,7 @@ describe("per-agent todowrite/todoread deny when task_system enabled", () => {
     expect(agentResult[getAgentDisplayName("hephaestus")]?.permission?.todoread).toBeUndefined()
   })
 
-  test("does not deny todowrite/todoread when task_system is undefined", async () => {
+  test("denies todowrite/todoread when task_system is undefined", async () => {
     //#given
     const createBuiltinAgentsMock = agents.createBuiltinAgents as unknown as {
       mockResolvedValue: (value: Record<string, unknown>) => void
@@ -1271,8 +1271,8 @@ describe("per-agent todowrite/todoread deny when task_system enabled", () => {
 
     //#then
     const agentResult = config.agent as Record<string, { permission?: Record<string, unknown> }>
-    expect(agentResult[getAgentDisplayName("sisyphus")]?.permission?.todowrite).toBeUndefined()
-    expect(agentResult[getAgentDisplayName("sisyphus")]?.permission?.todoread).toBeUndefined()
+    expect(agentResult[getAgentDisplayName("sisyphus")]?.permission?.todowrite).toBe("deny")
+    expect(agentResult[getAgentDisplayName("sisyphus")]?.permission?.todoread).toBe("deny")
   })
 })
 

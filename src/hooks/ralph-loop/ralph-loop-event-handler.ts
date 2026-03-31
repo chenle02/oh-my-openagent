@@ -8,8 +8,8 @@ import {
 	detectCompletionInTranscript,
 } from "./completion-promise-detector"
 import { continueIteration } from "./iteration-continuation"
+import { handlePendingVerification } from "./pending-verification-handler"
 import { handleDeletedLoopSession, handleErroredLoopSession } from "./session-event-handler"
-import { handleFailedVerification } from "./verification-failure-handler"
 
 type SessionRecovery = {
 	isRecovering: (sessionID: string) => boolean
@@ -87,7 +87,7 @@ export function createRalphLoopEventHandler(
 					return
 				}
 
-				const completionSessionID = verificationSessionID ?? (state.verification_pending ? undefined : sessionID)
+				const completionSessionID = verificationSessionID ?? sessionID
 				const transcriptPath = completionSessionID ? options.getTranscriptPath(completionSessionID) : undefined
 				const completionViaTranscript = completionSessionID
 					? detectCompletionInTranscript(
@@ -107,7 +107,13 @@ export function createRalphLoopEventHandler(
 							sinceMessageIndex: undefined,
 						})
 					: state.verification_pending
-						? false
+						? await detectCompletionInSessionMessages(ctx, {
+							sessionID,
+							promise: state.completion_promise,
+							apiTimeoutMs: options.apiTimeoutMs,
+							directory: options.directory,
+							sinceMessageIndex: state.message_count_at_start,
+						})
 					: await detectCompletionInSessionMessages(ctx, {
 						sessionID,
 						promise: state.completion_promise,
@@ -136,22 +142,22 @@ export function createRalphLoopEventHandler(
 				}
 
 				if (state.verification_pending) {
-					if (verificationSessionID && matchesVerificationSession) {
-						const restarted = await handleFailedVerification(ctx, {
-							state,
-							loopState: options.loopState,
-							directory: options.directory,
-							apiTimeoutMs: options.apiTimeoutMs,
+					if (!verificationSessionID && matchesParentSession) {
+						log(`[${HOOK_NAME}] Verification pending without tracked oracle session, running recovery check`, {
+							sessionID,
+							iteration: state.iteration,
 						})
-						if (restarted) {
-							return
-						}
 					}
 
-					log(`[${HOOK_NAME}] Waiting for oracle verification`, {
+					await handlePendingVerification(ctx, {
 						sessionID,
+						state,
 						verificationSessionID,
-						iteration: state.iteration,
+						matchesParentSession,
+						matchesVerificationSession,
+						loopState: options.loopState,
+						directory: options.directory,
+						apiTimeoutMs: options.apiTimeoutMs,
 					})
 					return
 				}

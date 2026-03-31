@@ -64,9 +64,36 @@ describe("runtime-fallback", () => {
 
   function createMockPluginConfigWithCategoryFallback(fallbackModels: string[]): OhMyOpenCodeConfig {
     return {
+      git_master: {
+        commit_footer: true,
+        include_co_authored_by: true,
+        git_env_prefix: "GIT_MASTER=1",
+      },
       categories: {
         test: {
           fallback_models: fallbackModels,
+        },
+      },
+    }
+  }
+
+  function createMockPluginConfigWithCategoryModel(
+    categoryName: string,
+    model: string,
+    fallbackModels: string[],
+    variant?: string,
+  ): OhMyOpenCodeConfig {
+    return {
+      git_master: {
+        commit_footer: true,
+        include_co_authored_by: true,
+        git_env_prefix: "GIT_MASTER=1",
+      },
+      categories: {
+        [categoryName]: {
+          model,
+          fallback_models: fallbackModels,
+          ...(variant ? { variant } : {}),
         },
       },
     }
@@ -255,6 +282,39 @@ describe("runtime-fallback", () => {
       expect(errorLog).toBeDefined()
     })
 
+    test("should trigger fallback when session.error says you've reached your usage limit", async () => {
+      const hook = createRuntimeFallbackHook(createMockPluginInput(), {
+        config: createMockConfig({ notify_on_fallback: false }),
+        pluginConfig: createMockPluginConfigWithCategoryFallback(["zai-coding-plan/glm-5.1"]),
+      })
+      const sessionID = "test-session-usage-limit"
+      SessionCategoryRegistry.register(sessionID, "test")
+
+      await hook.event({
+        event: {
+          type: "session.created",
+          properties: { info: { id: sessionID, model: "kimi-for-coding/k2p5" } },
+        },
+      })
+
+      await hook.event({
+        event: {
+          type: "session.error",
+          properties: {
+            sessionID,
+            error: { message: "You've reached your usage limit for this month. Please upgrade to continue." },
+          },
+        },
+      })
+
+      const fallbackLog = logCalls.find((c) => c.msg.includes("Preparing fallback"))
+      expect(fallbackLog).toBeDefined()
+      expect(fallbackLog?.data).toMatchObject({ from: "kimi-for-coding/k2p5", to: "zai-coding-plan/glm-5.1" })
+
+      const skipLog = logCalls.find((c) => c.msg.includes("Error not retryable"))
+      expect(skipLog).toBeUndefined()
+    })
+
     test("should continue fallback chain when fallback model is not found", async () => {
       const hook = createRuntimeFallbackHook(createMockPluginInput(), {
         config: createMockConfig({ notify_on_fallback: false }),
@@ -308,6 +368,114 @@ describe("runtime-fallback", () => {
         (c) => c.msg.includes("Error not retryable") && (c.data as { sessionID?: string } | undefined)?.sessionID === sessionID
       )
       expect(nonRetryLog).toBeUndefined()
+    })
+
+    test("should continue fallback chain when ProviderModelNotFoundError occurs", async () => {
+      const hook = createRuntimeFallbackHook(createMockPluginInput(), {
+        config: createMockConfig({ notify_on_fallback: false }),
+        pluginConfig: createMockPluginConfigWithCategoryFallback([
+          "anthropic/claude-opus-4.6",
+          "openai/gpt-5.4",
+        ]),
+      })
+      const sessionID = "test-session-provider-model-not-found"
+      SessionCategoryRegistry.register(sessionID, "test")
+
+      await hook.event({
+        event: {
+          type: "session.created",
+          properties: { info: { id: sessionID, model: "google/gemini-2.5-pro" } },
+        },
+      })
+
+      await hook.event({
+        event: {
+          type: "session.error",
+          properties: {
+            sessionID,
+            error: {
+              name: "AI_LoadAPIKeyError",
+              message:
+                "Google Generative AI API key is missing. Pass it using the 'apiKey' parameter or the GOOGLE_GENERATIVE_AI_API_KEY environment variable.",
+            },
+          },
+        },
+      })
+
+      await hook.event({
+        event: {
+          type: "session.error",
+          properties: {
+            sessionID,
+            error: {
+              name: "ProviderModelNotFoundError",
+              data: {
+                providerID: "anthropic",
+                modelID: "claude-opus-4.6",
+                message: "Model not found: anthropic/claude-opus-4.6.",
+              },
+            },
+          },
+        },
+      })
+
+      const fallbackLogs = logCalls.filter((c) => c.msg.includes("Preparing fallback"))
+      expect(fallbackLogs.length).toBeGreaterThanOrEqual(2)
+      expect(fallbackLogs[1]?.data).toMatchObject({ from: "anthropic/claude-opus-4.6", to: "openai/gpt-5.4" })
+    })
+
+    test("should bootstrap session.error fallback from session category model and preserve variant", async () => {
+      const promptCalls: Array<Record<string, unknown>> = []
+      const hook = createRuntimeFallbackHook(
+        createMockPluginInput({
+          session: {
+            messages: async () => ({
+              data: [{ info: { role: "user" }, parts: [{ type: "text", text: "continue" }] }],
+            }),
+            promptAsync: async (args) => {
+              promptCalls.push(args as Record<string, unknown>)
+              return {}
+            },
+          },
+        }),
+        {
+          config: createMockConfig({ notify_on_fallback: false }),
+          pluginConfig: createMockPluginConfigWithCategoryModel(
+            "quick",
+            "anthropic/claude-haiku-4-5",
+            ["openai/gpt-5.4(high)"],
+          ),
+        },
+      )
+      const sessionID = "test-session-category-bootstrap-session-error"
+      SessionCategoryRegistry.register(sessionID, "quick")
+
+      await hook.event({
+        event: {
+          type: "session.error",
+          properties: {
+            sessionID,
+            error: { statusCode: 429, message: "Rate limit exceeded" },
+          },
+        },
+      })
+
+      expect(promptCalls).toHaveLength(1)
+      const promptBody = promptCalls[0]?.body as {
+        model?: { providerID?: string; modelID?: string }
+        variant?: string
+      } | undefined
+      expect(promptBody?.model).toEqual({ providerID: "openai", modelID: "gpt-5.4" })
+      expect(promptBody?.variant).toBe("high")
+
+      const bootstrapLog = logCalls.find((call) =>
+        call.msg.includes("Derived model from session category config for session.error"),
+      )
+      expect(bootstrapLog?.data).toMatchObject({
+        sessionID,
+        category: "quick",
+        model: "anthropic/claude-haiku-4-5",
+      })
     })
 
     test("should trigger fallback on Copilot auto-retry signal in message.updated", async () => {
@@ -642,7 +810,13 @@ describe("runtime-fallback", () => {
     test("should log when no fallback models configured", async () => {
       const hook = createRuntimeFallbackHook(createMockPluginInput(), {
         config: createMockConfig(),
-        pluginConfig: {},
+        pluginConfig: {
+          git_master: {
+            commit_footer: true,
+            include_co_authored_by: true,
+            git_env_prefix: "GIT_MASTER=1",
+          },
+        },
       })
       const sessionID = "test-session-no-fallbacks"
 
@@ -903,6 +1077,63 @@ describe("runtime-fallback", () => {
       const fallbackLog = logCalls.find((c) => c.msg.includes("Preparing fallback"))
       expect(fallbackLog).toBeDefined()
       expect(fallbackLog?.data).toMatchObject({ from: "google/gemini-2.5-pro", to: "openai/gpt-5.4" })
+    })
+
+    test("should bootstrap message.updated fallback from session category model and preserve variant", async () => {
+      const promptCalls: Array<Record<string, unknown>> = []
+      const hook = createRuntimeFallbackHook(
+        createMockPluginInput({
+          session: {
+            messages: async () => ({
+              data: [{ info: { role: "user" }, parts: [{ type: "text", text: "continue" }] }],
+            }),
+            promptAsync: async (args) => {
+              promptCalls.push(args as Record<string, unknown>)
+              return {}
+            },
+          },
+        }),
+        {
+          config: createMockConfig({ notify_on_fallback: false }),
+          pluginConfig: createMockPluginConfigWithCategoryModel(
+            "quick",
+            "anthropic/claude-haiku-4-5",
+            ["openai/gpt-5.4(high)"],
+          ),
+        },
+      )
+      const sessionID = "test-session-category-bootstrap-message-updated"
+      SessionCategoryRegistry.register(sessionID, "quick")
+
+      await hook.event({
+        event: {
+          type: "message.updated",
+          properties: {
+            info: {
+              sessionID,
+              role: "assistant",
+              error: { statusCode: 429, message: "Rate limit exceeded" },
+            },
+          },
+        },
+      })
+
+      expect(promptCalls).toHaveLength(1)
+      const promptBody = promptCalls[0]?.body as {
+        model?: { providerID?: string; modelID?: string }
+        variant?: string
+      } | undefined
+      expect(promptBody?.model).toEqual({ providerID: "openai", modelID: "gpt-5.4" })
+      expect(promptBody?.variant).toBe("high")
+
+      const bootstrapLog = logCalls.find((call) =>
+        call.msg.includes("Derived model from session category config for message.updated"),
+      )
+      expect(bootstrapLog?.data).toMatchObject({
+        sessionID,
+        category: "quick",
+        model: "anthropic/claude-haiku-4-5",
+      })
     })
 
     test("should not advance fallback state from message.updated while retry is already in flight", async () => {
@@ -2117,6 +2348,11 @@ describe("runtime-fallback", () => {
   describe("fallback models configuration", () => {
     function createMockPluginConfigWithAgentFallback(agentName: string, fallbackModels: string[]): OhMyOpenCodeConfig {
       return {
+        git_master: {
+          commit_footer: true,
+          include_co_authored_by: true,
+          git_env_prefix: "GIT_MASTER=1",
+        },
         agents: {
           [agentName]: {
             fallback_models: fallbackModels,
@@ -2222,7 +2458,7 @@ describe("runtime-fallback", () => {
 
       expect(promptCalls.length).toBe(1)
       const callBody = promptCalls[0]?.body as Record<string, unknown>
-      expect(callBody?.agent).toBe("prometheus")
+      expect(callBody?.agent).toBe("Prometheus (Plan Builder)")
       expect(callBody?.model).toEqual({ providerID: "github-copilot", modelID: "claude-opus-4.6" })
     })
   })
@@ -2314,6 +2550,11 @@ describe("runtime-fallback", () => {
         {
           config: createMockConfig({ notify_on_fallback: false }),
           pluginConfig: {
+            git_master: {
+              commit_footer: true,
+              include_co_authored_by: true,
+              git_env_prefix: "GIT_MASTER=1",
+            },
             categories: {
               test: {
                 fallback_models: ["provider-a/model-a", "provider-b/model-b"],
@@ -2366,6 +2607,11 @@ describe("runtime-fallback", () => {
       const hook = createRuntimeFallbackHook(createMockPluginInput(), {
         config: createMockConfig({ notify_on_fallback: false }),
         pluginConfig: {
+          git_master: {
+            commit_footer: true,
+            include_co_authored_by: true,
+            git_env_prefix: "GIT_MASTER=1",
+          },
           categories: {
             test: {
               fallback_models: ["provider-a/model-a", "provider-b/model-b"],
@@ -2423,6 +2669,11 @@ describe("runtime-fallback", () => {
         {
           config: createMockConfig({ notify_on_fallback: false }),
           pluginConfig: {
+            git_master: {
+              commit_footer: true,
+              include_co_authored_by: true,
+              git_env_prefix: "GIT_MASTER=1",
+            },
             categories: {
               test: {
                 fallback_models: ["provider-a/model-a", "provider-b/model-b"],
@@ -2465,6 +2716,11 @@ describe("runtime-fallback", () => {
       const hook = createRuntimeFallbackHook(createMockPluginInput(), {
         config: createMockConfig({ notify_on_fallback: false }),
         pluginConfig: {
+          git_master: {
+            commit_footer: true,
+            include_co_authored_by: true,
+            git_env_prefix: "GIT_MASTER=1",
+          },
           categories: {
             test: {
               fallback_models: ["provider-a/model-a", "provider-b/model-b"],

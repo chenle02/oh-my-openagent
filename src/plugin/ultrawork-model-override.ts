@@ -110,12 +110,16 @@ function applyResolvedUltraworkOverride(args: {
   if (!override.providerID || !override.modelID) return
 
   const targetModel = { providerID: override.providerID, modelID: override.modelID }
+  const messageId = output.message["id"] as string | undefined
   if (isSameModel(output.message.model, targetModel)) {
+    if (validatedVariant && messageId) {
+      scheduleDeferredModelOverride(messageId, targetModel, validatedVariant)
+      log(`[ultrawork-model-override] Persist validated variant for active model: ${override.modelID}`)
+      return
+    }
     log(`[ultrawork-model-override] Skip override; target model already active: ${override.modelID}`)
     return
   }
-
-  const messageId = output.message["id"] as string | undefined
   if (!messageId) {
     log("[ultrawork-model-override] No message ID found, falling back to direct mutation")
     output.message.model = targetModel
@@ -161,7 +165,10 @@ export function applyUltraworkModelOverrideOnMessage(
     : currentModel
 
   if (!client || typeof (client as { provider?: { list?: unknown } }).provider?.list !== "function") {
-    applyResolvedUltraworkOverride({ override, validatedVariant: override.variant, output, inputAgentName, tui })
+    log("[ultrawork-model-override] SDK validation unavailable, skipping variant override", {
+      variant: override.variant,
+    })
+    applyResolvedUltraworkOverride({ override, validatedVariant: undefined, output, inputAgentName, tui })
     return
   }
 

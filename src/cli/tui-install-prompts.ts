@@ -54,7 +54,7 @@ export async function promptInstallConfig(detected: DetectedConfig): Promise<Ins
     message: "Will you integrate Google Gemini?",
     options: [
       { value: "no", label: "No", hint: "Frontend/docs agents will use fallback" },
-      { value: "yes", label: "Yes", hint: "Beautiful UI generation with Gemini 3 Pro" },
+      { value: "yes", label: "Yes", hint: "Beautiful UI generation with Gemini 3.1 Pro" },
     ],
     initialValue: initial.gemini,
   })
@@ -97,8 +97,18 @@ export async function promptInstallConfig(detected: DetectedConfig): Promise<Ins
       { value: "yes", label: "Yes", hint: "Kimi K2.5 for Sisyphus/Prometheus fallback" },
     ],
     initialValue: initial.kimiForCoding,
-  })
+})
   if (!kimiForCoding) return null
+
+  const opencodeGo = await selectOrCancel({
+    message: "Do you have an OpenCode Go subscription?",
+    options: [
+      { value: "no", label: "No", hint: "Will use other configured providers" },
+      { value: "yes", label: "Yes", hint: "OpenCode Go for quick tasks" },
+    ],
+    initialValue: initial.opencodeGo,
+  })
+  if (!opencodeGo) return null
 
   return {
     hasClaude: claude !== "no",
@@ -109,5 +119,6 @@ export async function promptInstallConfig(detected: DetectedConfig): Promise<Ins
     hasOpencodeZen: opencodeZen === "yes",
     hasZaiCodingPlan: zaiCodingPlan === "yes",
     hasKimiForCoding: kimiForCoding === "yes",
+    hasOpencodeGo: opencodeGo === "yes",
   }
 }

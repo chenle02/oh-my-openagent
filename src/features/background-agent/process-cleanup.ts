@@ -11,7 +11,7 @@ function registerProcessSignal(
     handler()
     if (exitAfter) {
       process.exitCode = 0
-      setTimeout(() => process.exit(), 6000).unref()
+      setTimeout(() => process.exit(), 6000)
     }
   }
   process.on(signal, listener)
@@ -19,7 +19,7 @@ function registerProcessSignal(
 }
 
 interface CleanupTarget {
-  shutdown(): void
+  shutdown(): void | Promise<void>
 }
 
 const cleanupManagers = new Set<CleanupTarget>()
@@ -32,14 +32,26 @@ export function registerManagerForCleanup(manager: CleanupTarget): void {
   if (cleanupRegistered) return
   cleanupRegistered = true
 
+  let cleanupPromise: Promise<void> | undefined
+
   const cleanupAll = () => {
+    if (cleanupPromise) return
+    const promises: Promise<void>[] = []
     for (const m of cleanupManagers) {
       try {
-        m.shutdown()
+        promises.push(
+          Promise.resolve(m.shutdown()).catch((error) => {
+            log("[background-agent] Error during async shutdown cleanup:", error)
+          })
+        )
       } catch (error) {
         log("[background-agent] Error during shutdown cleanup:", error)
       }
     }
+    cleanupPromise = Promise.allSettled(promises).then(() => {})
+    cleanupPromise.then(() => {
+      log("[background-agent] All shutdown cleanup completed")
+    })
   }
 
   const registerSignal = (signal: ProcessCleanupEvent, exitAfter: boolean): void => {

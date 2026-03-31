@@ -11,6 +11,8 @@ type BunInstallOutputMode = "inherit" | "pipe"
 
 interface RunBunInstallOptions {
   outputMode?: BunInstallOutputMode
+  /** Workspace directory to install to. Defaults to cache dir if not provided. */
+  workspaceDir?: string
 }
 
 interface BunInstallOutput {
@@ -64,8 +66,8 @@ function logCapturedOutputOnFailure(outputMode: BunInstallOutputMode, output: Bu
 }
 
 export async function runBunInstallWithDetails(options?: RunBunInstallOptions): Promise<BunInstallResult> {
-  const outputMode = options?.outputMode ?? "inherit"
-  const cacheDir = getOpenCodeCacheDir()
+  const outputMode = options?.outputMode ?? "pipe"
+  const cacheDir = options?.workspaceDir ?? getOpenCodeCacheDir()
   const packageJsonPath = `${cacheDir}/package.json`
 
   if (!existsSync(packageJsonPath)) {
